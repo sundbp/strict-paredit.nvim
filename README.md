@@ -18,7 +18,7 @@ Add to your plugins (e.g., `~/.config/nvim/lua/plugins/strict-paredit.lua`):
 
 ```lua
 return {
-  "yourusername/strict-paredit.nvim",  -- or local path, see below
+  "sundbp/strict-paredit.nvim",  -- or local path, see below
   dependencies = {
     "nvim-treesitter/nvim-treesitter",
   },
