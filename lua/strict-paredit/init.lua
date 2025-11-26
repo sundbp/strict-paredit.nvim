@@ -17,6 +17,11 @@ local closing_delims = {
 	["}"] = "{",
 }
 
+-- Symmetric delimiters (same char opens and closes)
+local symmetric_delims = {
+	['"'] = true,
+}
+
 -- Helper: get character at specific buffer position
 local function get_char_at(bufnr, row, col)
 	local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
@@ -54,7 +59,7 @@ local function find_delimiter_pair_at(row, col)
 	if not char then
 		return nil
 	end
-	if not opening_delims[char] and not closing_delims[char] then
+	if not opening_delims[char] and not closing_delims[char] and not symmetric_delims[char] then
 		return nil
 	end
 
@@ -76,6 +81,7 @@ local function find_delimiter_pair_at(row, col)
 		-- Check if this node starts and ends with matching delimiters
 		if start_char and end_char then
 			local is_matching_pair = (opening_delims[start_char] == end_char)
+				or (symmetric_delims[start_char] and start_char == end_char)
 
 			if is_matching_pair then
 				-- Check if our position is at one of the delimiters
@@ -160,6 +166,18 @@ local function handle_close_insert(char)
 	end
 end
 
+-- Handle symmetric delimiter (like ") in insert mode
+local function handle_symmetric_insert(char)
+	local at_cursor = char_at_cursor()
+	if at_cursor == char then
+		-- Move over existing delimiter
+		return "<Right>"
+	else
+		-- Insert pair
+		return char .. char .. "<Left>"
+	end
+end
+
 -- Handle backspace in insert mode
 local function handle_backspace()
 	local char, row, col = char_before_cursor()
@@ -169,7 +187,7 @@ local function handle_backspace()
 	end
 
 	-- Check if it's a delimiter
-	if opening_delims[char] or closing_delims[char] then
+	if opening_delims[char] or closing_delims[char] or symmetric_delims[char] then
 		local pair = find_delimiter_pair_at(row, col)
 
 		if pair then
@@ -194,7 +212,7 @@ local function handle_delete()
 		return "<Del>"
 	end
 
-	if opening_delims[char] or closing_delims[char] then
+	if opening_delims[char] or closing_delims[char] or symmetric_delims[char] then
 		local pair = find_delimiter_pair_at(row, col)
 
 		if pair then
@@ -217,7 +235,7 @@ local function handle_x_normal()
 		return "x"
 	end
 
-	if opening_delims[char] or closing_delims[char] then
+	if opening_delims[char] or closing_delims[char] or symmetric_delims[char] then
 		local pair = find_delimiter_pair_at(row, col)
 
 		if pair then
@@ -248,7 +266,7 @@ local function handle_X_normal()
 		return "X"
 	end
 
-	if opening_delims[char] or closing_delims[char] then
+	if opening_delims[char] or closing_delims[char] or symmetric_delims[char] then
 		local pair = find_delimiter_pair_at(row, col - 1)
 
 		if pair then
@@ -267,12 +285,69 @@ end
 local function handle_s_normal()
 	local char, row, col = char_at_cursor()
 
-	if char and (opening_delims[char] or closing_delims[char]) then
+	if char and (opening_delims[char] or closing_delims[char] or symmetric_delims[char]) then
 		vim.notify("Strict paredit: cannot substitute delimiter", vim.log.levels.WARN)
 		return ""
 	end
 
 	return "s"
+end
+
+-- add a paredit aware kill-line
+local function paredit_kill_line()
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local line_num = cursor[1]
+	local col = cursor[2]
+	local line = vim.api.nvim_buf_get_lines(0, line_num - 1, line_num, false)[1]
+
+	-- At end of line, join with next
+	if col >= #line then
+		vim.cmd("normal! J")
+		return
+	end
+
+	-- Try Treesitter-based approach first
+	local ok, node = pcall(vim.treesitter.get_node)
+	if ok and node then
+		-- Walk up the tree to find the closest closing delimiter on this line
+		local kill_to = #line
+		local current = node
+
+		while current do
+			local _, _, end_row, end_col = current:range()
+
+			if end_row == line_num - 1 and end_col > col then
+				kill_to = math.min(kill_to, end_col - 1)
+			end
+
+			current = current:parent()
+		end
+
+		vim.api.nvim_buf_set_text(0, line_num - 1, col, line_num - 1, kill_to, {})
+	else
+		-- Fallback: count parentheses manually
+		local rest_of_line = line:sub(col + 1)
+		local opens = 0
+		local closes = 0
+		local kill_to = #line
+
+		for i = 1, #rest_of_line do
+			local char = rest_of_line:sub(i, i)
+			if char == "(" or char == "[" or char == "{" then
+				opens = opens + 1
+			elseif char == ")" or char == "]" or char == "}" then
+				closes = closes + 1
+				if closes > opens then
+					kill_to = col + i - 1
+					break
+				end
+			end
+		end
+
+		if kill_to > col then
+			vim.api.nvim_buf_set_text(0, line_num - 1, col, line_num - 1, kill_to, {})
+		end
+	end
 end
 
 -- Handle string/comment awareness - check if we're in a string or comment
@@ -309,16 +384,6 @@ local function in_string_or_comment()
 	return false
 end
 
--- Wrap handlers to bypass in strings/comments
-local function make_smart_handler(handler, fallback)
-	return function()
-		if in_string_or_comment() then
-			return fallback
-		end
-		return handler()
-	end
-end
-
 -- Setup keymaps for a buffer
 local function setup_buffer_keymaps()
 	local opts_expr = { buffer = true, expr = true, replace_keycodes = true }
@@ -344,9 +409,20 @@ local function setup_buffer_keymaps()
 		end, opts_expr)
 	end
 
+	-- Insert mode: symmetric delimiters (like ")
+	for sym, _ in pairs(symmetric_delims) do
+		vim.keymap.set("i", sym, function()
+			-- Don't bypass for symmetric delims - we want to handle them at string boundaries
+			return handle_symmetric_insert(sym)
+		end, opts_expr)
+	end
+
 	-- Insert mode: backspace
 	vim.keymap.set("i", "<BS>", function()
-		if in_string_or_comment() then
+		-- Check if we're about to delete a symmetric delimiter (like ")
+		-- If so, don't bypass even if technically "in string"
+		local char_before = char_before_cursor()
+		if not symmetric_delims[char_before] and in_string_or_comment() then
 			return "<BS>"
 		end
 		return handle_backspace()
@@ -354,7 +430,8 @@ local function setup_buffer_keymaps()
 
 	-- Insert mode: delete
 	vim.keymap.set("i", "<Del>", function()
-		if in_string_or_comment() then
+		local char_at = char_at_cursor()
+		if not symmetric_delims[char_at] and in_string_or_comment() then
 			return "<Del>"
 		end
 		return handle_delete()
@@ -362,7 +439,8 @@ local function setup_buffer_keymaps()
 
 	-- Normal mode: x (delete char under cursor)
 	vim.keymap.set("n", "x", function()
-		if in_string_or_comment() then
+		local char_at = char_at_cursor()
+		if not symmetric_delims[char_at] and in_string_or_comment() then
 			return "x"
 		end
 		return handle_x_normal()
@@ -370,7 +448,10 @@ local function setup_buffer_keymaps()
 
 	-- Normal mode: X (delete char before cursor)
 	vim.keymap.set("n", "X", function()
-		if in_string_or_comment() then
+		local bufnr = vim.api.nvim_get_current_buf()
+		local cursor = vim.api.nvim_win_get_cursor(0)
+		local char_before = get_char_at(bufnr, cursor[1] - 1, cursor[2] - 1)
+		if not symmetric_delims[char_before] and in_string_or_comment() then
 			return "X"
 		end
 		return handle_X_normal()
@@ -382,6 +463,11 @@ local function setup_buffer_keymaps()
 			return "s"
 		end
 		return handle_s_normal()
+	end, opts_expr_noremap)
+
+	-- Normal mode: s (substitute - block on delimiters)
+	vim.keymap.set("n", "<C-k>", function()
+		vim.schedule(paredit_kill_line)
 	end, opts_expr_noremap)
 end
 
@@ -460,7 +546,7 @@ function M.can_delete_at_cursor()
 	if not char then
 		return true
 	end
-	if not opening_delims[char] and not closing_delims[char] then
+	if not opening_delims[char] and not closing_delims[char] and not symmetric_delims[char] then
 		return true
 	end
 	return find_delimiter_pair_at(row, col) ~= nil
