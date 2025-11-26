@@ -87,6 +87,10 @@ require("strict-paredit").setup({
 | `<BS>` | If before delimiter, deletes both it and its match |
 | `<Del>` | If on delimiter, deletes both it and its match |
 
+It also handles strings like "string" by inserting matching "-characters and
+always deleting them as a pair. If you type a " in this position "foo |bar",
+then an escaped " will be inserted.
+
 ### Normal Mode
 
 | Key | Behavior |

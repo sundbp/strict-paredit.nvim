@@ -166,12 +166,49 @@ local function handle_close_insert(char)
 	end
 end
 
+-- Handle string/comment awareness - check if we're in a string or comment
+local function in_string_or_comment()
+	local bufnr = vim.api.nvim_get_current_buf()
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local row, col = cursor[1] - 1, cursor[2]
+
+	local ok, node = pcall(vim.treesitter.get_node, { bufnr = bufnr, pos = { row, col } })
+	if not ok or not node then
+		return false
+	end
+
+	local node_type = node:type()
+	-- Common string/comment node types across languages
+	local skip_types = {
+		"string",
+		"string_content",
+		"str_lit",
+		"string_literal",
+		"comment",
+		"line_comment",
+		"block_comment",
+		"regex",
+		"regex_lit",
+	}
+
+	for _, t in ipairs(skip_types) do
+		if node_type == t or node_type:match(t) then
+			return true
+		end
+	end
+
+	return false
+end
+
 -- Handle symmetric delimiter (like ") in insert mode
 local function handle_symmetric_insert(char)
 	local at_cursor = char_at_cursor()
 	if at_cursor == char then
 		-- Move over existing delimiter
 		return "<Right>"
+	elseif in_string_or_comment() then
+		-- Inside a string, insert escaped version
+		return "\\" .. char
 	else
 		-- Insert pair
 		return char .. char .. "<Left>"
@@ -348,40 +385,6 @@ local function paredit_kill_line()
 			vim.api.nvim_buf_set_text(0, line_num - 1, col, line_num - 1, kill_to, {})
 		end
 	end
-end
-
--- Handle string/comment awareness - check if we're in a string or comment
-local function in_string_or_comment()
-	local bufnr = vim.api.nvim_get_current_buf()
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local row, col = cursor[1] - 1, cursor[2]
-
-	local ok, node = pcall(vim.treesitter.get_node, { bufnr = bufnr, pos = { row, col } })
-	if not ok or not node then
-		return false
-	end
-
-	local node_type = node:type()
-	-- Common string/comment node types across languages
-	local skip_types = {
-		"string",
-		"string_content",
-		"str_lit",
-		"string_literal",
-		"comment",
-		"line_comment",
-		"block_comment",
-		"regex",
-		"regex_lit",
-	}
-
-	for _, t in ipairs(skip_types) do
-		if node_type == t or node_type:match(t) then
-			return true
-		end
-	end
-
-	return false
 end
 
 -- Setup keymaps for a buffer
