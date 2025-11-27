@@ -22,6 +22,41 @@ local symmetric_delims = {
 	['"'] = true,
 }
 
+-- Common string/comment node types across languages
+local skip_types = {
+	"string",
+	"string_content",
+	"str_lit",
+	"string_literal",
+	"comment",
+	"line_comment",
+	"block_comment",
+	"regex",
+	"regex_lit",
+}
+
+-- Check if a treesitter node is (or is inside) a string/comment
+local function in_string_or_comment_at(bufnr, row, col)
+	local ok, node = pcall(vim.treesitter.get_node, { bufnr = bufnr, pos = { row, col } })
+	if not ok or not node then
+		return false
+	end
+
+	local current = node
+	while current do
+		local node_type = current:type()
+		for _, t in ipairs(skip_types) do
+			if node_type == t or node_type:match(t) then
+				return true
+			end
+		end
+
+		current = current:parent()
+	end
+
+	return false
+end
+
 -- Helper: current buffer balance for a given opening delimiter
 -- Returns positive when there are more opens than closes, zero when balanced,
 -- and negative when there are more closes (i.e. an unmatched closing exists).
@@ -35,9 +70,32 @@ local function delimiter_balance(open_char)
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local open_count, close_count = 0, 0
 
-	for _, line in ipairs(lines) do
-		open_count = open_count + select(2, line:gsub(vim.pesc(open_char), ""))
-		close_count = close_count + select(2, line:gsub(vim.pesc(close_char), ""))
+	for row, line in ipairs(lines) do
+		local search_start = 1
+		while true do
+			local idx = line:find(vim.pesc(open_char), search_start, true)
+			if not idx then
+				break
+			end
+			local col = idx - 1 -- zero-indexed for treesitter
+			if not in_string_or_comment_at(bufnr, row - 1, col) then
+				open_count = open_count + 1
+			end
+			search_start = idx + 1
+		end
+
+		search_start = 1
+		while true do
+			local idx = line:find(vim.pesc(close_char), search_start, true)
+			if not idx then
+				break
+			end
+			local col = idx - 1
+			if not in_string_or_comment_at(bufnr, row - 1, col) then
+				close_count = close_count + 1
+			end
+			search_start = idx + 1
+		end
 	end
 
 	return open_count - close_count
@@ -205,32 +263,7 @@ local function in_string_or_comment()
 	local cursor = vim.api.nvim_win_get_cursor(0)
 	local row, col = cursor[1] - 1, cursor[2]
 
-	local ok, node = pcall(vim.treesitter.get_node, { bufnr = bufnr, pos = { row, col } })
-	if not ok or not node then
-		return false
-	end
-
-	local node_type = node:type()
-	-- Common string/comment node types across languages
-	local skip_types = {
-		"string",
-		"string_content",
-		"str_lit",
-		"string_literal",
-		"comment",
-		"line_comment",
-		"block_comment",
-		"regex",
-		"regex_lit",
-	}
-
-	for _, t in ipairs(skip_types) do
-		if node_type == t or node_type:match(t) then
-			return true
-		end
-	end
-
-	return false
+	return in_string_or_comment_at(bufnr, row, col)
 end
 
 -- Handle symmetric delimiter (like ") in insert mode
