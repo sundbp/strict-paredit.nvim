@@ -22,6 +22,27 @@ local symmetric_delims = {
 	['"'] = true,
 }
 
+-- Helper: current buffer balance for a given opening delimiter
+-- Returns positive when there are more opens than closes, zero when balanced,
+-- and negative when there are more closes (i.e. an unmatched closing exists).
+local function delimiter_balance(open_char)
+	local close_char = opening_delims[open_char]
+	if not close_char then
+		return 0
+	end
+
+	local bufnr = vim.api.nvim_get_current_buf()
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	local open_count, close_count = 0, 0
+
+	for _, line in ipairs(lines) do
+		open_count = open_count + select(2, line:gsub(vim.pesc(open_char), ""))
+		close_count = close_count + select(2, line:gsub(vim.pesc(close_char), ""))
+	end
+
+	return open_count - close_count
+end
+
 -- Helper: get character at specific buffer position
 local function get_char_at(bufnr, row, col)
 	local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
@@ -149,12 +170,24 @@ end
 -- Handle opening delimiter in insert mode
 local function handle_open_insert(char)
 	local closing = opening_delims[char]
+
+	-- If the buffer already has more closing than opening delimiters of this
+	-- type, we are fixing an existing imbalance; don't add another closing.
+	if delimiter_balance(char) < 0 then
+		return char
+	end
 	-- Always auto-pair: insert both and place cursor between
 	return char .. closing .. "<Left>"
 end
 
 -- Handle closing delimiter in insert mode
 local function handle_close_insert(char)
+	local open = closing_delims[char]
+	-- Allow typing a needed closing delimiter when there are more opens than closes
+	if delimiter_balance(open) > 0 then
+		return char
+	end
+
 	local at_cursor = char_at_cursor()
 	if at_cursor == char then
 		-- Move over existing closing delimiter
