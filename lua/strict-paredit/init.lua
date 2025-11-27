@@ -330,63 +330,6 @@ local function handle_s_normal()
 	return "s"
 end
 
--- add a paredit aware kill-line
-local function paredit_kill_line()
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local line_num = cursor[1]
-	local col = cursor[2]
-	local line = vim.api.nvim_buf_get_lines(0, line_num - 1, line_num, false)[1]
-
-	-- At end of line, join with next
-	if col >= #line then
-		vim.cmd("normal! J")
-		return
-	end
-
-	-- Try Treesitter-based approach first
-	local ok, node = pcall(vim.treesitter.get_node)
-	if ok and node then
-		-- Walk up the tree to find the closest closing delimiter on this line
-		local kill_to = #line
-		local current = node
-
-		while current do
-			local _, _, end_row, end_col = current:range()
-
-			if end_row == line_num - 1 and end_col > col then
-				kill_to = math.min(kill_to, end_col - 1)
-			end
-
-			current = current:parent()
-		end
-
-		vim.api.nvim_buf_set_text(0, line_num - 1, col, line_num - 1, kill_to, {})
-	else
-		-- Fallback: count parentheses manually
-		local rest_of_line = line:sub(col + 1)
-		local opens = 0
-		local closes = 0
-		local kill_to = #line
-
-		for i = 1, #rest_of_line do
-			local char = rest_of_line:sub(i, i)
-			if char == "(" or char == "[" or char == "{" then
-				opens = opens + 1
-			elseif char == ")" or char == "]" or char == "}" then
-				closes = closes + 1
-				if closes > opens then
-					kill_to = col + i - 1
-					break
-				end
-			end
-		end
-
-		if kill_to > col then
-			vim.api.nvim_buf_set_text(0, line_num - 1, col, line_num - 1, kill_to, {})
-		end
-	end
-end
-
 -- Setup keymaps for a buffer
 local function setup_buffer_keymaps()
 	local opts_expr = { buffer = true, expr = true, replace_keycodes = true }
@@ -466,11 +409,6 @@ local function setup_buffer_keymaps()
 			return "s"
 		end
 		return handle_s_normal()
-	end, opts_expr_noremap)
-
-	-- Normal mode: s (substitute - block on delimiters)
-	vim.keymap.set("n", "<C-k>", function()
-		vim.schedule(paredit_kill_line)
 	end, opts_expr_noremap)
 end
 
