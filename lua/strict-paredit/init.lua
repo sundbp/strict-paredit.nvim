@@ -318,18 +318,6 @@ local function handle_X_normal()
 	return "X"
 end
 
--- Handle s in normal mode (substitute char)
-local function handle_s_normal()
-	local char, row, col = char_at_cursor()
-
-	if char and (opening_delims[char] or closing_delims[char] or symmetric_delims[char]) then
-		vim.notify("Strict paredit: cannot substitute delimiter", vim.log.levels.WARN)
-		return ""
-	end
-
-	return "s"
-end
-
 -- Setup keymaps for a buffer
 local function setup_buffer_keymaps()
 	local opts_expr = { buffer = true, expr = true, replace_keycodes = true }
@@ -401,14 +389,6 @@ local function setup_buffer_keymaps()
 			return "X"
 		end
 		return handle_X_normal()
-	end, opts_expr_noremap)
-
-	-- Normal mode: s (substitute - block on delimiters)
-	vim.keymap.set("n", "s", function()
-		if in_string_or_comment() then
-			return "s"
-		end
-		return handle_s_normal()
 	end, opts_expr_noremap)
 end
 
